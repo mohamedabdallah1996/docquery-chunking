@@ -26,39 +26,60 @@ more.
 
 ## Architecture
 
-A four-stage pipeline, each stage owning one concern:
+```mermaid
+flowchart LR
+    PD["ParsedDocument"] --> MP["MarkdownParser"]
+    MP -->|"MarkdownBlock[]\nheading/text/list/table/code"| SB["SectionBuilder"]
+    SB -->|"DocumentSection[]\nheading path + blocks"| SC["SectionChunker"]
+    SC <-->|"oversized text/table"| TS["TextSplitter"]
+    SC -->|"Chunk[]"| OUT["Chunk[]"]
+```
 
-1. **`MarkdownParser`** parses each page's markdown into a flat, typed sequence of
-   `MarkdownBlock`s (heading, text, list item, table, code) using markdown-it-py's real
-   CommonMark+GFM parser -- not regexes -- so table rows and code fences are recognized
-   structurally instead of guessed at from raw text.
-2. **`SectionBuilder`** groups blocks under the document's heading hierarchy (a `##` closes out
-   any deeper heading that came before it) and merges sections that are too small to be
-   useful on their own into the section that follows -- except sections containing a table,
-   which are never merged away regardless of size.
-3. **`SectionChunker`** walks each section in order, accumulating consecutive text/list blocks
-   into a run (split together, see below) while emitting tables and code blocks as their own
-   standalone chunk(s) immediately.
-4. **`TextSplitter`** turns an accumulated text/list run into one or more chunks near
-   `target_tokens`, and splits an oversized table by row group. Text splitting delegates to
-   LangChain's `RecursiveCharacterTextSplitter` (paragraph -> line -> sentence -> word/character,
-   recursively, measured against a real tokenizer) rather than a hand-rolled version -- that
-   problem is already solved well elsewhere. Table splitting stays custom: a row is atomic in a
-   way no generic text splitter understands, and the header must be repeated in every split-off
-   piece to remain valid Markdown.
+Four stages, each owning one concern:
 
-`StructureAwareChunker` (`chunker.py`) is the only concrete strategy today -- one concrete class,
-no strategy hierarchy, matching `docquery-ingestion`'s precedent of not introducing a
-Protocol/base class until a second real implementation exists to justify one.
+1. **`MarkdownParser`** -- markdown-it-py's real CommonMark+GFM parser turns each page into typed
+   blocks (heading/text/list item/table/code), not regex guesses.
+2. **`SectionBuilder`** -- groups blocks under the heading hierarchy, then merges sections too
+   small to be useful into the one that follows (a table always keeps its section alive, however
+   small).
+3. **`SectionChunker`** -- walks each section in order; tables/code become their own chunk(s)
+   immediately, consecutive text/list blocks accumulate into a run.
+4. **`TextSplitter`** -- splits a text run near `target_tokens` via LangChain's
+   `RecursiveCharacterTextSplitter` (tiktoken-backed, paragraph -> line -> sentence -> word,
+   recursively); splits an oversized table by row group with the header repeated (no library
+   does this -- a row is atomic, unlike a text splitter's separators).
 
-`build_chunker()` (`factory.py`) is the one place "which strategy" gets decided from a raw config
-dict -- callers never construct `StructureAwareChunker` directly.
+One concrete strategy (`StructureAwareChunker`), no Protocol/base class -- same precedent as
+`docquery-ingestion`, revisited if a second strategy shows up. `build_chunker()` is the only way
+callers get one.
 
-Token counting (`utils.count_tokens`) uses a generic tiktoken encoding, deliberately *not* the
-embedding model's actual tokenizer -- chunking doesn't know, and shouldn't need to know, which
-embedder will consume its output. `target_tokens` is a soft sizing target for retrieval quality,
-not a hard limit any API enforces, so an approximate, model-agnostic count is the right amount of
-precision here.
+## Input / Output
+
+**In**: [`docquery_core.ParsedDocument`](https://github.com/mohamedabdallah1996/docquery-core)
+
+| Field | Type | Notes |
+|---|---|---|
+| `doc_id` | `str` | |
+| `pages` | `tuple[ParsedPage, ...]` | each: `page_number: int`, `markdown: str`, `error: str \| None` |
+| `status` | `"DONE" \| "PARTIAL" \| "FAILED"` | |
+
+**Out**: `list[docquery_core.Chunk]`
+
+| Field | Type | Notes |
+|---|---|---|
+| `chunk_id` | `str` | content hash -- deterministic, stable across re-runs |
+| `doc_id` | `str` | |
+| `page_number` | `int` | source page of the run/block this chunk came from |
+| `chunk_type` | `"text" \| "table" \| "list" \| "code"` | never `"image"` -- see note below |
+| `section_path` | `tuple[str, ...]` | heading breadcrumb, e.g. `("Intro", "Background")` |
+| `content` | `str` | |
+| `asset_ref` | `str \| None` | always `None` here -- no image chunks produced |
+| `parent_chunk_id` | `str \| None` | hash of `doc_id` + `section_path`, ties sibling chunks together |
+
+`chunk_type="image"` is a valid value in the shared `Chunk` contract but this chunker never
+produces it -- v0 resolved image chunks against a separate captioning stage that doesn't exist in
+this pipeline (GLM-OCR does no image captioning), so image blocks are dropped rather than emitted
+empty.
 
 ## Project Structure
 
