@@ -7,9 +7,8 @@ import hashlib
 import tiktoken
 
 # A generic encoding, not the embedding model's actual tokenizer -- chunking
-# doesn't know (and shouldn't need to know) which embedder will consume its
-# output. This is a consistent proxy for "how big is this text", used only
-# as a soft sizing target, not a hard limit any API enforces.
+# doesn't need to know which embedder will consume its output. Just a soft
+# sizing proxy, not a hard limit.
 _ENCODING = tiktoken.get_encoding("cl100k_base")
 
 

@@ -89,12 +89,14 @@ def test_list_items_produce_list_chunk_type() -> None:
 
 
 def test_small_section_merges_forward_into_next() -> None:
-    """A bare header + one short line merges into the next section instead of standing alone."""
+    """A bare header + one short line merges into the next section instead of
+    standing alone -- but its own heading is preserved in the merged path,
+    not silently dropped, so a citation doesn't point at the wrong section."""
     chunks = _chunk(f"# Title\n\n## Empty\n\nx\n\n## Next\n\n{SUBSTANTIAL}\n")
     paths = {c.section_path for c in chunks}
     assert ("Title", "Empty") not in paths
-    next_chunks = [c for c in chunks if c.section_path == ("Title", "Next")]
-    assert any(c.content.startswith("x") for c in next_chunks)
+    merged_chunks = [c for c in chunks if c.section_path == ("Title", "Empty / Next")]
+    assert any(c.content.startswith("x") for c in merged_chunks)
 
 
 def test_section_with_table_is_never_merged_away_even_if_small() -> None:

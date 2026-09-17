@@ -1,9 +1,7 @@
-"""Resolves the full chunking module config into a ready-to-use chunker.
+"""Resolves the full chunking config into a ready-to-use chunker.
 
-This is the one place "which strategy" gets decided -- callers should never
-construct StructureAwareChunker directly. Only one strategy exists today;
-this stays a single-branch factory until a second one actually exists to
-select between.
+The one place "which strategy" gets decided -- callers never construct
+StructureAwareChunker directly. Single-branch until a second strategy exists.
 """
 
 from __future__ import annotations

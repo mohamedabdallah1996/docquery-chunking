@@ -133,6 +133,16 @@ orchestrator overrides this the same way for its own reasons; see
 uv run pytest
 ```
 
+### End-to-end demo
+
+`chunker.py` has a `main()` that runs the chunker over a small but challenging document (nested
+headings, a mergeable section, an atomic table, an oversized table, a list, a code fence, an
+oversized paragraph) and prints every resulting chunk:
+
+```bash
+uv run python -m docquery_chunking.chunker
+```
+
 ## Development
 
 ```bash

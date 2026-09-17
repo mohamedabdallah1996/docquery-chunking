@@ -1,13 +1,9 @@
-"""Splits accumulated text/list-item runs, and oversized tables, into
-retrieval-sized chunks.
+"""Splits text/list runs and oversized tables into retrieval-sized chunks.
 
-Text splitting delegates to LangChain's RecursiveCharacterTextSplitter, which
-already solves "pack near a token budget, falling back through smaller
-separators for anything still oversized" more robustly than a hand-rolled
-version would (paragraph -> line -> sentence -> word/character, recursively,
-measured against a real tokenizer). Table splitting stays custom: a table
-row is atomic in a way no generic text splitter understands, and the header
-must be repeated in every split-off piece to stay valid Markdown.
+Text splitting delegates to LangChain's RecursiveCharacterTextSplitter
+(paragraph -> line -> sentence -> word/char, tokenizer-aware) rather than a
+hand-rolled version. Table splitting stays custom: a row is atomic, and the
+header must repeat in every split-off piece to stay valid Markdown.
 """
 
 from __future__ import annotations
@@ -16,20 +12,20 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from docquery_chunking.utils import count_tokens
 
-# Largest-to-smallest split points: keep paragraphs together first, then
-# lines, then sentences -- only falling back to raw word/character breaks
-# for a single run-on sentence that's still oversized on its own.
+# Largest-to-smallest split points, tried in order.
 _SEPARATORS = ["\n\n", "\n", ". ", "! ", "? ", " ", ""]
 
 
 class TextSplitter:
-    def __init__(self, *, target_tokens: int) -> None:
+    def __init__(self, *, target_tokens: int, min_section_tokens: int) -> None:
         self._target_tokens = target_tokens
+        self._min_section_tokens = min_section_tokens
         self._splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
             encoding_name="cl100k_base",
             separators=_SEPARATORS,
             chunk_size=target_tokens,
             chunk_overlap=0,
+            keep_separator="end",
         )
 
     def split_text_blocks(self, blocks: list[str], *, is_list: bool = False) -> list[str]:
@@ -38,7 +34,26 @@ class TextSplitter:
         if not blocks:
             return []
         texts = [f"- {block}" if is_list else block for block in blocks]
-        return self._splitter.split_text("\n\n".join(texts))
+        pieces = self._splitter.split_text("\n\n".join(texts))
+        return self._merge_undersized_pieces(pieces)
+
+    def _merge_undersized_pieces(self, pieces: list[str]) -> list[str]:
+        """Fold an undersized piece into the one that follows it, if it fits.
+
+        Edge case: an undersized *last* piece has nothing to fold into and
+        is left as-is (e.g. a short remark trailing an oversized paragraph).
+        """
+        if not pieces:
+            return pieces
+
+        merged = [pieces[0]]
+        for piece in pieces[1:]:
+            fits_budget = count_tokens(merged[-1]) + count_tokens(piece) <= self._target_tokens
+            if count_tokens(merged[-1]) < self._min_section_tokens and fits_budget:
+                merged[-1] = f"{merged[-1]}\n\n{piece}"
+            else:
+                merged.append(piece)
+        return merged
 
     def split_table(self, header: list[str], rows: list[list[str]]) -> list[str]:
         """Split a Markdown table without ever breaking a row.

@@ -41,11 +41,12 @@ class SectionBuilder:
     def _merge_small_sections(self, sections: list[DocumentSection]) -> list[DocumentSection]:
         """Merge very small text sections into the following section.
 
-        Sections containing a table are never merged, since a table is
-        meaningful regardless of its size.
+        Sections containing a table or code block are never merged, since
+        those are meaningful regardless of their size.
         """
         merged: list[DocumentSection] = []
         carried_blocks: list[MarkdownBlock] = []
+        carried_headings: list[str] = []  # leaf headings merged away so far, oldest first
 
         for index, section in enumerate(sections):
             blocks = carried_blocks + section.blocks
@@ -54,9 +55,18 @@ class SectionBuilder:
 
             if not is_last and self._should_merge(blocks):
                 carried_blocks = blocks
+                # Skip empty headings (e.g. "# Title" right before "## A") --
+                # nothing was merged away, so there's nothing to attribute.
+                if section.path and section.blocks:
+                    carried_headings.append(section.path[-1])
                 continue
 
-            merged.append(DocumentSection(path=section.path, blocks=blocks))
+            path = section.path
+            if carried_headings and path:
+                path = [*path[:-1], " / ".join([*carried_headings, path[-1]])]
+            carried_headings = []
+
+            merged.append(DocumentSection(path=path, blocks=blocks))
 
         if carried_blocks:
             if merged:
@@ -67,7 +77,8 @@ class SectionBuilder:
         return merged
 
     def _should_merge(self, blocks: list[MarkdownBlock]) -> bool:
-        if any(block.kind == "table" for block in blocks):
+        # A table or code block is meaningful regardless of size.
+        if any(block.kind in ("table", "code") for block in blocks):
             return False
         return self._count_tokens(blocks) < self._min_section_tokens
 
